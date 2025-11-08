@@ -56,6 +56,7 @@ class Job(SQLModel, table=True):
     error_message: Optional[str] = Field(default=None)
     target_langs: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     presets: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
+    requested_by: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=True)))
     stage_history: dict = Field(default_factory=dict, sa_column=Column(JSON))

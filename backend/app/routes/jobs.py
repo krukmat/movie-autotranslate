@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
@@ -56,6 +56,7 @@ async def list_jobs(
 @router.post("/translate", response_model=JobResponse)
 async def create_translation_job(
     payload: JobCreateRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> JobResponse:
     asset = await asset_service.get_asset_by_external_id(session, payload.asset_id)
@@ -74,11 +75,21 @@ async def create_translation_job(
         session.add(asset)
         await session.commit()
 
+    client_id = _client_id(request)
+    if settings.max_active_jobs_per_key > 0 and client_id != "anonymous":
+        active = await job_service.count_active_jobs_for_requester(session, client_id)
+        if active >= settings.max_active_jobs_per_key:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Job quota exceeded for this API key.",
+            )
+
     job = await job_service.create_job(
         session,
         asset=asset,
         target_langs=payload.target_langs,
         presets=payload.presets,
+        requested_by=client_id if client_id != "anonymous" else None,
     )
     resume_value = payload.resume_from.value if payload.resume_from else None
     enqueue_pipeline_job(job_external_id=job.external_id, resume_from=resume_value)
@@ -103,16 +114,24 @@ def _parse_stage(value: Optional[JobStage]) -> JobStage:
     return value or JobStage.ASR
 
 
+def _client_id(request: Request) -> str:
+    return getattr(request.state, "client_id", "anonymous")
+
+
 @router.post("/{job_id}/retry", response_model=JobResponse)
 async def retry_job(
     job_id: str,
     payload: JobRetryRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> JobResponse:
     job = await job_service.get_job_by_external_id(session, job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
     resume_stage = _parse_stage(payload.resume_from)
+    client_id = _client_id(request)
+    if job.requested_by and client_id != job.requested_by:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot retry jobs created by another API key.")
     await job_service.reset_job_for_retry(session, job=job, resume_stage=resume_stage)
     enqueue_pipeline_job(job_external_id=job.external_id, resume_from=resume_stage.value)
     asset = await session.get(Asset, job.asset_id)
@@ -123,6 +142,7 @@ async def retry_job(
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def cancel_job(
     job_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     job = await job_service.get_job_by_external_id(session, job_id)
@@ -130,5 +150,8 @@ async def cancel_job(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
     if job.status == JobStatus.SUCCESS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Completed jobs cannot be cancelled.")
+    client_id = _client_id(request)
+    if job.requested_by and client_id != job.requested_by:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot cancel jobs created by another API key.")
     await job_service.cancel_job(session, job=job)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

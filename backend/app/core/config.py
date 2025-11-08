@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     app_name: str = "Movie AutoTranslate API"
     api_prefix: str = "/v1"
     environment: str = Field(default="dev", env="ENVIRONMENT")
+    api_key_header: str = Field(default="X-API-Key", env="API_KEY_HEADER")
+    api_keys: List[str] = Field(default_factory=list, env="API_KEYS")
+    rate_limit_per_minute: int = Field(default=120, env="RATE_LIMIT_PER_MINUTE")
 
     database_url: str = Field(default_factory=_default_database_url, env="DATABASE_URL")
 
@@ -31,6 +34,8 @@ class Settings(BaseSettings):
     minio_bucket_raw: str = Field(default="raw", env="MINIO_BUCKET_RAW")
     minio_bucket_processed: str = Field(default="proc", env="MINIO_BUCKET_PROCESSED")
     minio_bucket_public: str = Field(default="pub", env="MINIO_BUCKET_PUBLIC")
+    upload_url_expiry_seconds: int = Field(default=3600, env="UPLOAD_URL_EXPIRY")
+    download_url_expiry_seconds: int = Field(default=900, env="DOWNLOAD_URL_EXPIRY")
 
     allowed_languages: List[str] = Field(
         default_factory=lambda: ["en", "es", "fr", "de"],
@@ -38,6 +43,7 @@ class Settings(BaseSettings):
     )
     upload_part_size: int = Field(default=8 * 1024 * 1024, env="UPLOAD_PART_SIZE")  # 8 MB
     max_upload_size: int = Field(default=8 * 1024 * 1024 * 1024, env="MAX_UPLOAD_SIZE")  # 8 GB
+    max_active_jobs_per_key: int = Field(default=5, env="MAX_ACTIVE_JOBS_PER_KEY")
 
     class Config:
         env_file = ".env"

@@ -20,6 +20,7 @@ async def create_job(
     asset: Asset,
     target_langs: List[str],
     presets: dict,
+    requested_by: Optional[str],
 ) -> Job:
     job = Job(
         external_id=generate_job_id(),
@@ -29,6 +30,7 @@ async def create_job(
         progress=0.0,
         target_langs=target_langs,
         presets=presets,
+        requested_by=requested_by,
     )
     session.add(job)
     await session.commit()
@@ -114,3 +116,13 @@ async def cancel_job(
     await session.commit()
     await session.refresh(job)
     return job
+
+
+async def count_active_jobs_for_requester(session: AsyncSession, requested_by: Optional[str]) -> int:
+    if not requested_by:
+        return 0
+    stmt = select(func.count(Job.id)).where(
+        Job.requested_by == requested_by,
+        Job.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),
+    )
+    return await session.scalar(stmt) or 0

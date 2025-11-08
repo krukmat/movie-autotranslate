@@ -40,7 +40,7 @@ def get_presigned_parts(object_name: str, upload_id: str, total_size: int) -> Li
     url = _client.presigned_put_object(
         bucket_name=settings.minio_bucket_raw,
         object_name=object_name,
-        expires=3600,
+        expires=settings.upload_url_expiry_seconds,
     )
     return [{"partNumber": 1, "uploadUrl": url}]
 
@@ -62,5 +62,5 @@ def build_signed_url(object_name: str, bucket: str | None = None, expires: int =
         method="GET",
         bucket_name=bucket_name,
         object_name=object_name,
-        expires=expires,
+        expires=expires or settings.download_url_expiry_seconds,
     )

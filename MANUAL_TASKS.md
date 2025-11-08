@@ -46,6 +46,10 @@
    - Inspect MinIO buckets (`raw/proc/pub`) for expected artifacts.
 8. **Optional: enable Demucs separation**  
    Install Demucs (`pip install demucs`), set `MIX_USE_DEMUCS=1`, and ensure the CLI generates `no_vocals.wav` under `mix/<lang>/demucs/`. Adjust `DEMUCS_MODEL` if you prefer an alternate preset.
+9. **Configure API authentication & limits**  
+   - Generate shared API keys for each client (`uuidgen` or a secrets manager) and set the comma-separated list in `API_KEYS`.  
+   - Optionally change `API_KEY_HEADER` (defaults to `X-API-Key`) and `RATE_LIMIT_PER_MINUTE` before deploying.  
+   - Communicate the header name + value to integrators and update ingress proxies/firewalls accordingly.
 
 ## Backlog & Future Enhancements
 - Integrate real diarization using pyannote to replace the stub in `workers/diarization/basic.py`.
