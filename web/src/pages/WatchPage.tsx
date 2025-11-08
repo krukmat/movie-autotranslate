@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchAsset } from "../api";
 import type { Asset } from "../api/types";
@@ -28,7 +28,20 @@ export default function WatchPage() {
     return <p>Loading asset...</p>;
   }
 
+  const publishedTracks = useMemo(() => {
+    return Object.entries(asset.storageKeys)
+      .filter(([key]) => key.startsWith("public_"))
+      .map(([key, value]) => ({
+        language: key.replace("public_", ""),
+        url: value
+      }));
+  }, [asset.storageKeys]);
+
   const masterUrl = asset.outputs.hls || asset.storageKeys.public;
+  const [selectedTrack, setSelectedTrack] = useState(masterUrl || "");
+  useEffect(() => {
+    setSelectedTrack(masterUrl || "");
+  }, [masterUrl]);
 
   if (!masterUrl) {
     return <p>No published HLS manifest yet. Check back later.</p>;
@@ -37,7 +50,32 @@ export default function WatchPage() {
   return (
     <main>
       <h1>Playback</h1>
-      <HlsPlayer src={masterUrl} />
+      {publishedTracks.length > 0 && (
+        <label>
+          Audio track
+          <select value={selectedTrack} onChange={(event) => setSelectedTrack(event.target.value)}>
+            <option value={masterUrl}>Master (auto)</option>
+            {publishedTracks.map((track) => (
+              <option key={track.language} value={track.url}>
+                {track.language.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <HlsPlayer src={selectedTrack || masterUrl} />
+      {publishedTracks.length > 0 && (
+        <section>
+          <h2>Available outputs</h2>
+          <ul>
+            {publishedTracks.map((track) => (
+              <li key={track.language}>
+                {track.language.toUpperCase()}: <code>{track.url}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </main>
   );
 }

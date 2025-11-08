@@ -8,7 +8,7 @@ export type JobStage =
   | "PUBLISHED"
   | "DONE";
 
-export type JobStatus = "PENDING" | "RUNNING" | "SUCCESS" | "FAILED";
+export type JobStatus = "PENDING" | "RUNNING" | "SUCCESS" | "FAILED" | "CANCELLED";
 
 export interface Job {
   jobId: string;
@@ -22,6 +22,16 @@ export interface Job {
   errorMessage?: string;
   targetLangs: string[];
   presets: Record<string, string>;
+  logsKey?: string;
+  stageHistory?: Record<
+    string,
+    {
+      status: string;
+      details?: Record<string, unknown>;
+      updatedAt?: string;
+    }
+  >;
+  availableOutputs?: Record<string, string>;
 }
 
 export interface Asset {

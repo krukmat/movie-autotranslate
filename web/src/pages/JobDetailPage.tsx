@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { fetchJob } from "../api";
 import type { Job } from "../api/types";
 import JobProgress from "../components/JobProgress";
+import StageHistory from "../components/StageHistory";
 
 export default function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
@@ -51,6 +52,23 @@ export default function JobDetailPage() {
       <h1>Job {job.jobId}</h1>
       <JobProgress job={job} />
       <p>Status: {job.status}</p>
+      <section>
+        <h2>Stage history</h2>
+        <StageHistory job={job} />
+      </section>
+      {job.logsKey && (
+        <section>
+          <h2>Logs</h2>
+          <p>
+            Logs stored at <code>{job.logsKey}</code> (download via MinIO or the ops panel).
+          </p>
+        </section>
+      )}
+      <section>
+        <h2>Targets & Preset</h2>
+        <p>Languages: {job.targetLangs.join(", ")}</p>
+        <p>Preset: {job.presets?.default ?? "neutral"}</p>
+      </section>
       {job.status === "SUCCESS" && <Link to={`/watch/${job.assetId}`}>Open player</Link>}
     </main>
   );
