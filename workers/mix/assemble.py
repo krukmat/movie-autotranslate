@@ -140,7 +140,7 @@ def assemble_track(
     return final_path
 
 
-def publish_track(asset_id: str, language: str, audio_path: Path, public_dir: Path) -> str:
+def publish_track(asset_id: str, language: str, audio_path: Path, public_dir: Path) -> dict:
     playlist_dir = public_dir / language
     playlist_dir.mkdir(parents=True, exist_ok=True)
     master_path = public_dir / "master.m3u8"
@@ -165,6 +165,6 @@ def publish_track(asset_id: str, language: str, audio_path: Path, public_dir: Pa
             master_path,
             content_type="application/vnd.apple.mpegurl",
         )
-        return master_object_name
+        return {"master": master_object_name, "audio": audio_object_name}
     except Exception:  # pragma: no cover - depends on MinIO
-        return master_path.as_posix()
+        return {"master": master_path.as_posix(), "audio": audio_object_name}

@@ -27,6 +27,7 @@ def map_job(job: Job, asset_external_id: str) -> JobResponse:
         targetLangs=job.target_langs,
         presets=job.presets,
         logsKey=job.logs_key,
+        stageHistory=job.stage_history or {},
     )
 
 
@@ -68,7 +69,8 @@ async def create_translation_job(
         target_langs=payload.target_langs,
         presets=payload.presets,
     )
-    enqueue_pipeline_job(job_external_id=job.external_id, resume_from=payload.resume_from)
+    resume_value = payload.resume_from.value if payload.resume_from else None
+    enqueue_pipeline_job(job_external_id=job.external_id, resume_from=resume_value)
     return map_job(job, asset.external_id)
 
 

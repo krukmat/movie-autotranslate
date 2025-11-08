@@ -11,6 +11,7 @@
 - Models: store Whisper checkpoints under `models/whisper/` and Piper voices under `models/piper/`; tweak via `ASR_MODEL_DIR` and `PIPER_MODEL_DIR`.
 - Audio mix: `workers/mix/assemble.py` now emits voice/background stems and loudness-normalized outputs; flip `MIX_USE_DEMUCS=1` to enable Demucs separation when the CLI is installed.
 - Observability: Prometheus metrics live at `api:8000/metrics` (control plane) and `worker:9101/metrics` (per-stage); JSONL logs per job are stored under `proc/{assetId}/logs/` with keys exposed as `logsKey`.
+- Resume: see `docs/pipeline.md` for stage checkpoints and `resumeFrom` usage; `/v1/jobs/{id}` now surfaces `stageHistory` plus `logsKey`.
 - Layer in DX and resilience last: `11_observability.md`, `14_security_ethics.md`, `13_testing_ci.md`, then ship clients (`08_frontend_web.md`, `09_frontend_react_native.md`).
 
 ## Build, Test, and Development Commands

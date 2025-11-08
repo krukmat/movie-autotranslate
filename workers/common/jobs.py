@@ -58,3 +58,24 @@ def update_logs_key(job_external_id: str, logs_key: str | None) -> None:
         job.updated_at = datetime.utcnow()
         session.add(job)
         session.commit()
+
+
+def record_stage_history(
+    job_external_id: str,
+    stage: str,
+    status: str,
+    details: dict | None = None,
+) -> None:
+    with get_session() as session:
+        result = session.exec(select(Job).where(Job.external_id == job_external_id))
+        job = result.one()
+        history = job.stage_history or {}
+        history[stage] = {
+            "status": status,
+            "details": details or {},
+            "updatedAt": datetime.utcnow().isoformat(),
+        }
+        job.stage_history = history
+        job.updated_at = datetime.utcnow()
+        session.add(job)
+        session.commit()

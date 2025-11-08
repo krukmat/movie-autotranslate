@@ -57,6 +57,7 @@ class Job(SQLModel, table=True):
     presets: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=True)))
     updated_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=True)))
+    stage_history: dict = Field(default_factory=dict, sa_column=Column(JSON))
 
 
 class Segment(SQLModel, table=True):
