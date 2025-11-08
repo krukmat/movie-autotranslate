@@ -15,18 +15,24 @@
    curl -L -o models/piper/en_US-amy-medium.onnx.json https://...
    ```  
    Update `PIPER_VOICES` env var if you choose different voices.
-3. **Rebuild the stack with models mounted**  
+3. **Install CLI prerequisites (run once per workstation/CI runner)**  
+   ```bash
+   brew install ffmpeg              # or apt/yum equivalent
+   pip install piper-tts demucs     # ensures `piper` and `demucs` binaries exist
+   ```  
+   Adjust PATH or virtualenv activation so the worker container (or host) can invoke these commands.
+4. **Rebuild the stack with models mounted**  
    ```bash
    make down
    make up
    ```  
    Ensure `/workspace/models` is populated inside the worker container.
-4. **Run the demo smoke test**  
+5. **Run the demo smoke test**  
    ```bash
    python scripts/seed_demo.py
    ```  
    Watch the Celery logs (`make logs`) until the job reaches `DONE`.
-5. **Execute test suites**  
+6. **Execute test suites**  
    ```bash
    (cd backend && pytest)
    (cd workers && pytest)
@@ -34,11 +40,11 @@
    (cd mobile && npm test)
    ```  
    Confirm lint/type-check commands succeed if configured.
-6. **Manual verification**  
+7. **Manual verification**  
    - Hit `http://localhost:8000/metrics` and ensure Prometheus counters render.  
    - Play the HLS output via web/mobile clients; confirm audio sync and track switching.  
    - Inspect MinIO buckets (`raw/proc/pub`) for expected artifacts.
-7. **Optional: enable Demucs separation**  
+8. **Optional: enable Demucs separation**  
    Install Demucs (`pip install demucs`), set `MIX_USE_DEMUCS=1`, and ensure the CLI generates `no_vocals.wav` under `mix/<lang>/demucs/`. Adjust `DEMUCS_MODEL` if you prefer an alternate preset.
 
 ## Backlog & Future Enhancements
