@@ -1,10 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import get_settings
 from ..core.database import get_session
-from ..models import Asset, Job
-from ..schemas.jobs import JobCreateRequest, JobResponse
+from ..models import Asset, Job, JobStage, JobStatus
+from ..schemas.jobs import (
+    JobCreateRequest,
+    JobListResponse,
+    JobResponse,
+    JobRetryRequest,
+)
 from ..services import assets as asset_service
 from ..services import jobs as job_service
 from ..queue import enqueue_pipeline_job
@@ -31,15 +38,19 @@ def map_job(job: Job, asset_external_id: str) -> JobResponse:
     )
 
 
-@router.get("", response_model=list[JobResponse])
-async def list_jobs(session: AsyncSession = Depends(get_session)) -> list[JobResponse]:
-    jobs = await job_service.list_jobs(session)
+@router.get("", response_model=JobListResponse)
+async def list_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, alias="pageSize", ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+) -> JobListResponse:
+    jobs, total = await job_service.list_jobs(session, page=page, page_size=page_size)
     responses: list[JobResponse] = []
     for job in jobs:
         asset = await session.get(Asset, job.asset_id)
         asset_external_id = asset.external_id if asset else str(job.asset_id)
         responses.append(map_job(job, asset_external_id))
-    return responses
+    return JobListResponse(items=responses, total=total, page=page, page_size=page_size)
 
 
 @router.post("/translate", response_model=JobResponse)
@@ -86,3 +97,38 @@ async def get_job(
     asset = await session.get(Asset, job.asset_id)
     asset_external_id = asset.external_id if asset else str(job.asset_id)
     return map_job(job, asset_external_id)
+
+
+def _parse_stage(value: Optional[JobStage]) -> JobStage:
+    return value or JobStage.ASR
+
+
+@router.post("/{job_id}/retry", response_model=JobResponse)
+async def retry_job(
+    job_id: str,
+    payload: JobRetryRequest,
+    session: AsyncSession = Depends(get_session),
+) -> JobResponse:
+    job = await job_service.get_job_by_external_id(session, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    resume_stage = _parse_stage(payload.resume_from)
+    await job_service.reset_job_for_retry(session, job=job, resume_stage=resume_stage)
+    enqueue_pipeline_job(job_external_id=job.external_id, resume_from=resume_stage.value)
+    asset = await session.get(Asset, job.asset_id)
+    asset_external_id = asset.external_id if asset else str(job.asset_id)
+    return map_job(job, asset_external_id)
+
+
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def cancel_job(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    job = await job_service.get_job_by_external_id(session, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    if job.status == JobStatus.SUCCESS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Completed jobs cannot be cancelled.")
+    await job_service.cancel_job(session, job=job)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

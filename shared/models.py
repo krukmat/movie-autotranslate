@@ -23,6 +23,7 @@ class JobStatus(str, enum.Enum):
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class Asset(SQLModel, table=True):

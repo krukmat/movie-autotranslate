@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Asset, Job, JobStage, JobStatus
@@ -64,11 +64,53 @@ async def update_job_stage(
     return job
 
 
-async def list_jobs_for_asset(session: AsyncSession, asset: Asset) -> List[Job]:
-    result = await session.execute(select(Job).where(Job.asset_id == asset.id))
-    return list(result.scalars())
+async def list_jobs(
+    session: AsyncSession,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[List[Job], int]:
+    page = max(page, 1)
+    page_size = max(min(page_size, 100), 1)
+    offset = (page - 1) * page_size
+    query = select(Job).order_by(Job.created_at.desc()).offset(offset).limit(page_size)
+    result = await session.execute(query)
+    jobs = list(result.scalars())
+    total = await session.scalar(select(func.count(Job.id)))
+    return jobs, total or 0
 
 
-async def list_jobs(session: AsyncSession, limit: int = 50) -> List[Job]:
-    result = await session.execute(select(Job).order_by(Job.created_at.desc()).limit(limit))
-    return list(result.scalars())
+async def reset_job_for_retry(
+    session: AsyncSession,
+    *,
+    job: Job,
+    resume_stage: JobStage,
+) -> Job:
+    job.stage = resume_stage
+    job.status = JobStatus.PENDING
+    job.progress = 0.0
+    job.failed_stage = None
+    job.error_message = None
+    job.started_at = None
+    job.ended_at = None
+    job.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+async def cancel_job(
+    session: AsyncSession,
+    *,
+    job: Job,
+    reason: str = "Cancelled",
+) -> Job:
+    job.status = JobStatus.CANCELLED
+    job.failed_stage = job.stage
+    job.error_message = reason
+    job.progress = 1.0
+    job.ended_at = datetime.utcnow()
+    job.updated_at = datetime.utcnow()
+    await session.commit()
+    await session.refresh(job)
+    return job

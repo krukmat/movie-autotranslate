@@ -79,3 +79,14 @@ def record_stage_history(
         job.updated_at = datetime.utcnow()
         session.add(job)
         session.commit()
+
+
+def mark_cancelled(job_external_id: str, message: str = "Cancelled") -> None:
+    update_job(
+        job_external_id,
+        stage=JobStage.DONE,
+        status=JobStatus.CANCELLED,
+        progress=1.0,
+        error_message=message,
+        failed_stage=None,
+    )

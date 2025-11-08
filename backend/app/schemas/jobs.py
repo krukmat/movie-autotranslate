@@ -17,6 +17,13 @@ class JobCreateRequest(BaseModel):
         allow_population_by_field_name = True
 
 
+class JobRetryRequest(BaseModel):
+    resume_from: Optional[JobStage] = Field(default=None, alias="resumeFrom")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 class JobResponse(BaseModel):
     job_id: str = Field(alias="jobId")
     asset_id: str = Field(alias="assetId")
@@ -31,6 +38,16 @@ class JobResponse(BaseModel):
     presets: Dict[str, str] = Field(default_factory=dict)
     stage_history: Dict[str, dict] = Field(default_factory=dict, alias="stageHistory")
     logs_key: Optional[str] = Field(default=None, alias="logsKey")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class JobListResponse(BaseModel):
+    items: List[JobResponse]
+    total: int
+    page: int
+    page_size: int = Field(alias="pageSize")
 
     class Config:
         allow_population_by_field_name = True

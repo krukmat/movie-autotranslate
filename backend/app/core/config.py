@@ -2,7 +2,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List
 
-from pydantic import AnyUrl, BaseSettings, Field
+from pydantic import AnyUrl, Field
+from pydantic_settings import BaseSettings
 
 
 def _default_database_url() -> str:
