@@ -26,6 +26,7 @@ def map_job(job: Job, asset_external_id: str) -> JobResponse:
         errorMessage=job.error_message,
         targetLangs=job.target_langs,
         presets=job.presets,
+        logsKey=job.logs_key,
     )
 
 

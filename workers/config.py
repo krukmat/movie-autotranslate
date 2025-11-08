@@ -48,6 +48,8 @@ class WorkerSettings(BaseSettings):
     mix_voice_gain: float = Field(default=1.0, env="MIX_VOICE_GAIN")
     mix_background_gain: float = Field(default=0.35, env="MIX_BACKGROUND_GAIN")
     mix_target_loudness: float = Field(default=-16.0, env="MIX_TARGET_LOUDNESS")
+    metrics_host: str = Field(default="0.0.0.0", env="METRICS_HOST")
+    metrics_port: int = Field(default=9101, env="METRICS_PORT")
 
     class Config:
         env_file = ".env"

@@ -48,3 +48,13 @@ def mark_failure(job_external_id: str, stage: JobStage, message: str) -> None:
         error_message=message,
         failed_stage=stage,
     )
+
+
+def update_logs_key(job_external_id: str, logs_key: str | None) -> None:
+    with get_session() as session:
+        result = session.exec(select(Job).where(Job.external_id == job_external_id))
+        job = result.one()
+        job.logs_key = logs_key
+        job.updated_at = datetime.utcnow()
+        session.add(job)
+        session.commit()

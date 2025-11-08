@@ -29,6 +29,7 @@ class JobResponse(BaseModel):
     error_message: Optional[str] = Field(default=None, alias="errorMessage")
     target_langs: List[Languages] = Field(default_factory=list, alias="targetLangs")
     presets: Dict[str, str] = Field(default_factory=dict)
+    logs_key: Optional[str] = Field(default=None, alias="logsKey")
 
     class Config:
         allow_population_by_field_name = True
