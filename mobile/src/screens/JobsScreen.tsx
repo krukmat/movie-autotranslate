@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, TouchableOpacity, View } from "react-native";
-import { ActivityIndicator, Text } from "react-native-paper";
+import { ActivityIndicator, Button, Text } from "react-native-paper";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../../App";
-import { fetchJobs, type Job } from "../api";
+import { fetchJobs, retryJob, type Job } from "../api";
 
 export default function JobsScreen({ navigation }: NativeStackScreenProps<RootStackParamList, "Jobs">) {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -14,8 +14,8 @@ export default function JobsScreen({ navigation }: NativeStackScreenProps<RootSt
   const loadJobs = async () => {
     try {
       setRefreshing(true);
-      const results = await fetchJobs();
-      setJobs(results);
+      const response = await fetchJobs();
+      setJobs(response.items);
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -28,6 +28,17 @@ export default function JobsScreen({ navigation }: NativeStackScreenProps<RootSt
   useEffect(() => {
     loadJobs();
   }, []);
+
+  const handleRetry = async (job: Job) => {
+    try {
+      const stageHistory = job.stageHistory ?? {};
+      const failedStage = job.failedStage || Object.keys(stageHistory).find((stage) => stageHistory[stage]?.status === "failed");
+      await retryJob(job.jobId, failedStage);
+      loadJobs();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
 
   if (loading) {
     return (
@@ -56,8 +67,16 @@ export default function JobsScreen({ navigation }: NativeStackScreenProps<RootSt
             <View>
               <Text variant="titleMedium">Job {item.jobId.slice(0, 6)}</Text>
               <Text>{item.status} · {item.stage}</Text>
+              <Text>Targets: {item.targetLangs?.join(", ")}</Text>
             </View>
-            <Text>{Math.round(item.progress * 100)}%</Text>
+            <View style={styles.rowRight}>
+              <Text>{Math.round(item.progress * 100)}%</Text>
+              {item.status === "FAILED" && (
+                <Button mode="text" compact onPress={() => handleRetry(item)}>
+                  Retry
+                </Button>
+              )}
+            </View>
           </View>
         </TouchableOpacity>
       )}
@@ -81,6 +100,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center"
+  },
+  rowRight: {
+    alignItems: "flex-end",
+    gap: 4
   },
   empty: {
     marginTop: 24
