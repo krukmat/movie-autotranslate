@@ -126,3 +126,31 @@ async def count_active_jobs_for_requester(session: AsyncSession, requested_by: O
         Job.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),
     )
     return await session.scalar(stmt) or 0
+
+
+async def count_jobs_by_status(session: AsyncSession) -> dict[JobStatus, int]:
+    stmt = select(Job.status, func.count(Job.id)).group_by(Job.status)
+    result = await session.execute(stmt)
+    counts: dict[JobStatus, int] = {}
+    for status, total in result.all():
+        counts[status] = int(total or 0)
+    return counts
+
+
+async def count_running_jobs_by_stage(session: AsyncSession) -> dict[JobStage, int]:
+    stmt = (
+        select(Job.stage, func.count(Job.id))
+        .where(Job.status == JobStatus.RUNNING)
+        .group_by(Job.stage)
+    )
+    result = await session.execute(stmt)
+    counts: dict[JobStage, int] = {}
+    for stage, total in result.all():
+        counts[stage] = int(total or 0)
+    return counts
+
+
+async def fetch_recent_jobs(session: AsyncSession, limit: int = 200) -> list[Job]:
+    stmt = select(Job).order_by(Job.updated_at.desc()).limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars())

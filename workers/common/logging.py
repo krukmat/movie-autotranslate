@@ -63,16 +63,18 @@ class StageTimer:
     stage: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     start_time: float = field(default_factory=time.perf_counter)
+    duration_ms: Optional[float] = None
 
     def end(self, status: str, message: str = "") -> None:
         duration_ms = (time.perf_counter() - self.start_time) * 1000
+        self.duration_ms = round(duration_ms, 2)
         log_event(
             job_id=self.job_id,
             asset_id=self.asset_id,
             stage=self.stage,
             event=status,
             message=message,
-            extra={"durationMs": round(duration_ms, 2), **self.metadata},
+            extra={"durationMs": self.duration_ms, **self.metadata},
         )
 
 

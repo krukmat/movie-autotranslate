@@ -2,10 +2,31 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from celery import shared_task
-from prometheus_client import start_http_server
+try:  # pragma: no cover - fallback for environments without Celery installed
+    from celery import shared_task
+except ImportError:  # pragma: no cover
+    def shared_task(*_args, **_kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
+try:  # pragma: no cover - allow local tests without prometheus_client
+    from prometheus_client import start_http_server
+except ImportError:  # pragma: no cover
+    def start_http_server(*_args, **_kwargs) -> None:
+        return None
+
+
+_TASK_RETRY_KWARGS = {
+    "bind": True,
+    "autoretry_for": (Exception,),
+    "retry_backoff": True,
+    "retry_backoff_max": 60,
+    "retry_jitter": True,
+    "retry_kwargs": {"max_retries": 3},
+}
 from sqlmodel import select
 
 from shared.models import Asset, Job, JobStage, JobStatus
@@ -78,6 +99,16 @@ def _stage_order(stage: JobStage) -> int:
 
 def _should_skip(stage: JobStage, resume_stage: JobStage, artifact_ready: bool) -> bool:
     return _stage_order(stage) < _stage_order(resume_stage) and artifact_ready
+
+
+def _retry_state(task: Any) -> tuple[int, bool]:
+    request = getattr(task, "request", None)
+    retries = getattr(request, "retries", 0) or 0
+    max_retries = getattr(task, "max_retries", 0) or 0
+    if not max_retries:
+        retry_kwargs = getattr(task, "retry_kwargs", {}) or {}
+        max_retries = retry_kwargs.get("max_retries", 0) or 0
+    return int(retries), retries < max_retries if max_retries else False
 
 
 def _target_languages(job: Job, asset: Asset) -> List[str]:
@@ -164,8 +195,8 @@ def run_pipeline(job_id: str, resume_from: Optional[str] = None) -> str:
     return job_id
 
 
-@shared_task(name="workers.pipeline.run_asr_stage")
-def run_asr_stage(job_id: str, resume_from: str, log_file: str) -> None:
+@shared_task(name="workers.pipeline.run_asr_stage", **_TASK_RETRY_KWARGS)
+def run_asr_stage(self, job_id: str, resume_from: str, log_file: str) -> None:
     set_job_log_file(Path(log_file))
     job, asset = _load_job(job_id)
     workspace = asset_workspace(asset.external_id)
@@ -181,25 +212,45 @@ def run_asr_stage(job_id: str, resume_from: str, log_file: str) -> None:
         diarization_segments = None
         diarization_dir = workspace / "diarization"
         diarization_enabled = bool(asset.storage_keys.get("diarization"))
+        timer = None
         try:
-            with stage_context(job_id=job_id, asset_id=asset.external_id, stage=JobStage.ASR.value):
+            with stage_context(job_id=job_id, asset_id=asset.external_id, stage=JobStage.ASR.value) as stage_timer:
+                timer = stage_timer
                 if diarization_enabled:
                     diarization_segments = run_diarization(audio_path, diarization_dir)
                 asr_dir = workspace / "asr"
                 transcribe(audio_path, asr_dir, diarization_segments)
-            job_state.record_stage_history(job_id, JobStage.ASR.value, "success", {"diarization": diarization_enabled})
+            details = {"diarization": diarization_enabled}
+            if timer and timer.duration_ms is not None:
+                details["durationMs"] = timer.duration_ms
+            job_state.record_stage_history(job_id, JobStage.ASR.value, "success", details)
         except Exception as exc:
-            job_state.record_stage_history(job_id, JobStage.ASR.value, "failed", {"error": str(exc)})
-            job_state.mark_failure(job_id, JobStage.ASR, str(exc))
+            retries, will_retry = _retry_state(self)
+            attempt = retries + 1
+            details = {"error": str(exc), "attempt": attempt}
+            if timer and timer.duration_ms is not None:
+                details["durationMs"] = timer.duration_ms
+            status = "retrying" if will_retry else "failed"
+            job_state.record_stage_history(job_id, JobStage.ASR.value, status, details)
             set_job_log_file(None)
+            if will_retry:
+                log_event(
+                    job_id=job_id,
+                    asset_id=asset.external_id,
+                    stage=JobStage.ASR.value,
+                    event="RETRY",
+                    message=f"ASR failed (attempt {attempt}), retrying",
+                )
+                raise
+            job_state.mark_failure(job_id, JobStage.ASR, str(exc))
             raise
 
     set_job_log_file(None)
     run_translate_stage.delay(job_id, resume_from, log_file)
 
 
-@shared_task(name="workers.pipeline.run_translate_stage")
-def run_translate_stage(job_id: str, resume_from: str, log_file: str) -> None:
+@shared_task(name="workers.pipeline.run_translate_stage", **_TASK_RETRY_KWARGS)
+def run_translate_stage(self, job_id: str, resume_from: str, log_file: str) -> None:
     set_job_log_file(Path(log_file))
     job, asset = _load_job(job_id)
     resume_stage = _parse_resume(resume_from)
@@ -220,26 +271,51 @@ def run_translate_stage(job_id: str, resume_from: str, log_file: str) -> None:
         log_event(job_id=job_id, asset_id=asset.external_id, stage=JobStage.TRANSLATE.value, event="SKIP", message="Translations reused")
     else:
         lang_status: Dict[str, str] = {lang: "existing" for lang in languages if lang not in missing}
+        timer = None
         try:
-            with stage_context(job_id=job_id, asset_id=asset.external_id, stage=JobStage.TRANSLATE.value, metadata={"targets": languages}):
+            with stage_context(
+                job_id=job_id,
+                asset_id=asset.external_id,
+                stage=JobStage.TRANSLATE.value,
+                metadata={"targets": languages},
+            ) as stage_timer:
+                timer = stage_timer
                 translations_dir = workspace / "translations"
                 for lang in languages:
                     if lang in missing:
                         translate_segments(asr_path, translations_dir, lang)
                         lang_status[lang] = "success"
-            job_state.record_stage_history(job_id, JobStage.TRANSLATE.value, "success", {"languages": lang_status})
+            details = {"languages": lang_status}
+            if timer and timer.duration_ms is not None:
+                details["durationMs"] = timer.duration_ms
+            job_state.record_stage_history(job_id, JobStage.TRANSLATE.value, "success", details)
         except Exception as exc:
-            job_state.record_stage_history(job_id, JobStage.TRANSLATE.value, "failed", {"error": str(exc)})
-            job_state.mark_failure(job_id, JobStage.TRANSLATE, str(exc))
+            retries, will_retry = _retry_state(self)
+            attempt = retries + 1
+            details = {"error": str(exc), "attempt": attempt}
+            if timer and timer.duration_ms is not None:
+                details["durationMs"] = timer.duration_ms
+            status = "retrying" if will_retry else "failed"
+            job_state.record_stage_history(job_id, JobStage.TRANSLATE.value, status, details)
             set_job_log_file(None)
+            if will_retry:
+                log_event(
+                    job_id=job_id,
+                    asset_id=asset.external_id,
+                    stage=JobStage.TRANSLATE.value,
+                    event="RETRY",
+                    message=f"Translation failed (attempt {attempt}), retrying",
+                )
+                raise
+            job_state.mark_failure(job_id, JobStage.TRANSLATE, str(exc))
             raise
 
     set_job_log_file(None)
     run_tts_stage.delay(job_id, resume_from, log_file)
 
 
-@shared_task(name="workers.pipeline.run_tts_stage")
-def run_tts_stage(job_id: str, resume_from: str, log_file: str) -> None:
+@shared_task(name="workers.pipeline.run_tts_stage", **_TASK_RETRY_KWARGS)
+def run_tts_stage(self, job_id: str, resume_from: str, log_file: str) -> None:
     set_job_log_file(Path(log_file))
     job, asset = _load_job(job_id)
     resume_stage = _parse_resume(resume_from)
@@ -255,8 +331,15 @@ def run_tts_stage(job_id: str, resume_from: str, log_file: str) -> None:
         workspace = asset_workspace(asset.external_id)
         translations_dir = workspace / "translations"
         lang_status: Dict[str, str] = {lang: "existing" for lang in languages if lang not in missing}
+        timer = None
         try:
-            with stage_context(job_id=job_id, asset_id=asset.external_id, stage=JobStage.TTS.value, metadata={"targets": languages}):
+            with stage_context(
+                job_id=job_id,
+                asset_id=asset.external_id,
+                stage=JobStage.TTS.value,
+                metadata={"targets": languages},
+            ) as stage_timer:
+                timer = stage_timer
                 for lang in languages:
                     segments_path = translations_dir / f"segments_tgt.{lang}.json"
                     translated_segments = json.loads(segments_path.read_text(encoding="utf-8"))
@@ -268,19 +351,37 @@ def run_tts_stage(job_id: str, resume_from: str, log_file: str) -> None:
                             voice_presets=job.presets,
                         )
                         lang_status[lang] = "success"
-            job_state.record_stage_history(job_id, JobStage.TTS.value, "success", {"languages": lang_status})
+            details = {"languages": lang_status}
+            if timer and timer.duration_ms is not None:
+                details["durationMs"] = timer.duration_ms
+            job_state.record_stage_history(job_id, JobStage.TTS.value, "success", details)
         except Exception as exc:
-            job_state.record_stage_history(job_id, JobStage.TTS.value, "failed", {"error": str(exc)})
-            job_state.mark_failure(job_id, JobStage.TTS, str(exc))
+            retries, will_retry = _retry_state(self)
+            attempt = retries + 1
+            details = {"error": str(exc), "attempt": attempt}
+            if timer and timer.duration_ms is not None:
+                details["durationMs"] = timer.duration_ms
+            status = "retrying" if will_retry else "failed"
+            job_state.record_stage_history(job_id, JobStage.TTS.value, status, details)
             set_job_log_file(None)
+            if will_retry:
+                log_event(
+                    job_id=job_id,
+                    asset_id=asset.external_id,
+                    stage=JobStage.TTS.value,
+                    event="RETRY",
+                    message=f"TTS failed (attempt {attempt}), retrying",
+                )
+                raise
+            job_state.mark_failure(job_id, JobStage.TTS, str(exc))
             raise
 
     set_job_log_file(None)
     run_mix_stage.delay(job_id, resume_from, log_file)
 
 
-@shared_task(name="workers.pipeline.run_mix_stage")
-def run_mix_stage(job_id: str, resume_from: str, log_file: str) -> None:
+@shared_task(name="workers.pipeline.run_mix_stage", **_TASK_RETRY_KWARGS)
+def run_mix_stage(self, job_id: str, resume_from: str, log_file: str) -> None:
     set_job_log_file(Path(log_file))
     job, asset = _load_job(job_id)
     resume_stage = _parse_resume(resume_from)
@@ -297,8 +398,15 @@ def run_mix_stage(job_id: str, resume_from: str, log_file: str) -> None:
         log_event(job_id=job_id, asset_id=asset.external_id, stage=JobStage.ALIGN_MIX.value, event="SKIP", message="Mix reused")
     else:
         lang_status: Dict[str, str] = {lang: "existing" for lang in languages if lang not in missing}
+        timer = None
         try:
-            with stage_context(job_id=job_id, asset_id=asset.external_id, stage=JobStage.ALIGN_MIX.value, metadata={"targets": languages}):
+            with stage_context(
+                job_id=job_id,
+                asset_id=asset.external_id,
+                stage=JobStage.ALIGN_MIX.value,
+                metadata={"targets": languages},
+            ) as stage_timer:
+                timer = stage_timer
                 for lang in languages:
                     segments_path = workspace / "translations" / f"segments_tgt.{lang}.json"
                     translated_segments = json.loads(segments_path.read_text(encoding="utf-8"))
@@ -315,19 +423,37 @@ def run_mix_stage(job_id: str, resume_from: str, log_file: str) -> None:
                         if not final_audio.exists():
                             raise RuntimeError(f"Mix failed for {lang}")
                         lang_status[lang] = "success"
-            job_state.record_stage_history(job_id, JobStage.ALIGN_MIX.value, "success", {"languages": lang_status})
+            details = {"languages": lang_status}
+            if timer and timer.duration_ms is not None:
+                details["durationMs"] = timer.duration_ms
+            job_state.record_stage_history(job_id, JobStage.ALIGN_MIX.value, "success", details)
         except Exception as exc:
-            job_state.record_stage_history(job_id, JobStage.ALIGN_MIX.value, "failed", {"error": str(exc)})
-            job_state.mark_failure(job_id, JobStage.ALIGN_MIX, str(exc))
+            retries, will_retry = _retry_state(self)
+            attempt = retries + 1
+            details = {"error": str(exc), "attempt": attempt}
+            if timer and timer.duration_ms is not None:
+                details["durationMs"] = timer.duration_ms
+            status = "retrying" if will_retry else "failed"
+            job_state.record_stage_history(job_id, JobStage.ALIGN_MIX.value, status, details)
             set_job_log_file(None)
+            if will_retry:
+                log_event(
+                    job_id=job_id,
+                    asset_id=asset.external_id,
+                    stage=JobStage.ALIGN_MIX.value,
+                    event="RETRY",
+                    message=f"Mix failed (attempt {attempt}), retrying",
+                )
+                raise
+            job_state.mark_failure(job_id, JobStage.ALIGN_MIX, str(exc))
             raise
 
     set_job_log_file(None)
     run_package_stage.delay(job_id, resume_from, log_file)
 
 
-@shared_task(name="workers.pipeline.run_package_stage")
-def run_package_stage(job_id: str, resume_from: str, log_file: str) -> None:
+@shared_task(name="workers.pipeline.run_package_stage", **_TASK_RETRY_KWARGS)
+def run_package_stage(self, job_id: str, resume_from: str, log_file: str) -> None:
     set_job_log_file(Path(log_file))
     job, asset = _load_job(job_id)
     resume_stage = _parse_resume(resume_from)
@@ -348,8 +474,15 @@ def run_package_stage(job_id: str, resume_from: str, log_file: str) -> None:
 
     lang_status: Dict[str, str] = {lang: "existing" for lang in languages if lang not in missing}
     public_dir = asset_public_dir(asset.external_id)
+    timer = None
     try:
-        with stage_context(job_id=job_id, asset_id=asset.external_id, stage=JobStage.PACKAGE.value, metadata={"targets": languages}):
+        with stage_context(
+            job_id=job_id,
+            asset_id=asset.external_id,
+            stage=JobStage.PACKAGE.value,
+            metadata={"targets": languages},
+        ) as stage_timer:
+            timer = stage_timer
             for lang in languages:
                 mix_path = mix_output_file(asset.external_id, lang)
                 if not mix_path.exists():
@@ -363,11 +496,29 @@ def run_package_stage(job_id: str, resume_from: str, log_file: str) -> None:
                     asset.storage_keys[f"public_{lang}"] = audio_key
                     asset_state.update_storage_keys(asset.external_id, asset.storage_keys)
                     lang_status[lang] = "success"
-        job_state.record_stage_history(job_id, JobStage.PACKAGE.value, "success", {"languages": lang_status})
+        details = {"languages": lang_status}
+        if timer and timer.duration_ms is not None:
+            details["durationMs"] = timer.duration_ms
+        job_state.record_stage_history(job_id, JobStage.PACKAGE.value, "success", details)
     except Exception as exc:
-        job_state.record_stage_history(job_id, JobStage.PACKAGE.value, "failed", {"error": str(exc)})
-        job_state.mark_failure(job_id, JobStage.PACKAGE, str(exc))
+        retries, will_retry = _retry_state(self)
+        attempt = retries + 1
+        details = {"error": str(exc), "attempt": attempt}
+        if timer and timer.duration_ms is not None:
+            details["durationMs"] = timer.duration_ms
+        status = "retrying" if will_retry else "failed"
+        job_state.record_stage_history(job_id, JobStage.PACKAGE.value, status, details)
         set_job_log_file(None)
+        if will_retry:
+            log_event(
+                job_id=job_id,
+                asset_id=asset.external_id,
+                stage=JobStage.PACKAGE.value,
+                event="RETRY",
+                message=f"Packaging failed (attempt {attempt}), retrying",
+            )
+            raise
+        job_state.mark_failure(job_id, JobStage.PACKAGE, str(exc))
         raise
 
     set_job_log_file(None)

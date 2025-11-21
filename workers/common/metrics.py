@@ -1,6 +1,35 @@
 from __future__ import annotations
 
-from prometheus_client import Counter, Gauge, Histogram
+try:  # pragma: no cover - optional dependency for local tests
+    from prometheus_client import Counter, Gauge, Histogram
+except ImportError:  # pragma: no cover
+    class _NoOpMetric:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def labels(self, **_: str) -> "_NoOpMetric":
+            return self
+
+        def inc(self, *_: float, **__: float) -> None:
+            return None
+
+        def dec(self, *_: float, **__: float) -> None:
+            return None
+
+        def observe(self, *_: float, **__: float) -> None:
+            return None
+
+        def set(self, *_: float, **__: float) -> None:
+            return None
+
+    class Counter(_NoOpMetric):
+        pass
+
+    class Gauge(_NoOpMetric):
+        pass
+
+    class Histogram(_NoOpMetric):
+        pass
 
 stage_in_progress = Gauge("job_stage_in_progress", "Jobs running per stage", ["stage"])
 stage_failures = Counter("job_stage_failures_total", "Stage failures", ["stage"])
@@ -23,4 +52,3 @@ def report_stage_end(stage: str, duration_seconds: float) -> None:
 
 def report_stage_failure(stage: str) -> None:
     stage_failures.labels(stage=stage).inc()
-*** End Patch
